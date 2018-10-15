@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.text.*?>
+<?import javafx.scene.paint.*?>
+<?import javafx.scene.control.*?>
+<?import java.lang.*?>
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.layout.AnchorPane?>
+
+<AnchorPane prefHeight="422.0" prefWidth="510.0" xmlns="http://javafx.com/javafx/8" xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.cx.coffeehi.spider.javafx.SpiderController">
+   <children>
+      <Button fx:id="startSpider" layoutX="118.0" layoutY="180.0" mnemonicParsing="false" onAction="#startSpider" prefHeight="29.0" prefWidth="73.0" text="启动" textFill="#2e95b8" />
+      <TextField fx:id="questionId" layoutX="118.0" layoutY="42.0" prefHeight="23.0" prefWidth="161.0" />
+      <TextArea fx:id="consoleLog" layoutY="242.0" prefHeight="180.0" prefWidth="514.0" />
+      <Button fx:id="stopSpider" layoutX="325.0" layoutY="180.0" mnemonicParsing="false" onAction="#stopSpider" prefHeight="29.0" prefWidth="73.0" text="停止" textFill="#e1390f" />
+      <CheckBox fx:id="checkPic" layoutX="118.0" layoutY="93.0" mnemonicParsing="false" onAction="#checkPic" text="图片" />
+      <CheckBox fx:id="checkVideo" layoutX="227.0" layoutY="92.0" mnemonicParsing="false" onAction="#checkVideo" text="视频" />
+      <Label alignment="CENTER" contentDisplay="CENTER" layoutX="14.0" layoutY="86.0" prefHeight="29.0" prefWidth="73.0" text="爬取内容：" textAlignment="JUSTIFY" textOverrun="CLIP">
+         <font>
+            <Font name="System Bold" size="13.0" />
+         </font>
+      </Label>
+      <Label alignment="CENTER" contentDisplay="CENTER" layoutX="14.0" layoutY="39.0" prefHeight="29.0" prefWidth="73.0" text="问题id：" textAlignment="JUSTIFY" textOverrun="CLIP">
+         <font>
+            <Font size="13.0" />
+         </font>
+      </Label>
+      <ProgressBar fx:id="progressBar" layoutY="226.0" prefHeight="8.0" prefWidth="514.0" progress="0.0" />
+      <Label alignment="CENTER" contentDisplay="CENTER" layoutX="14.0" layoutY="131.0" prefHeight="29.0" prefWidth="73.0" text="保存路径：" textAlignment="JUSTIFY" textOverrun="CLIP">
+         <font>
+            <Font name="System Bold" size="13.0" />
+         </font>
+      </Label>
+      <Button fx:id="getSavePath" layoutX="424.0" layoutY="134.0" mnemonicParsing="false" onAction="#getSavePath" text="选择路径" />
+      <TextField fx:id="savePath" editable="false" layoutX="116.0" layoutY="134.0" prefHeight="23.0" prefWidth="282.0" />
+   </children>
+</AnchorPane>
