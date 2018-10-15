@@ -37,6 +37,7 @@ import javafx.scene.control.CheckBox;
 @Data
 @Log4j
 public class SpiderController implements Initializable {
+    private Thread spiderThread;
     private SpiderContext spiderContext;
     @FXML
     private Button startSpider;
@@ -60,23 +61,11 @@ public class SpiderController implements Initializable {
     @FXML
     public void startSpider(ActionEvent event) {
         setQuestionId();
-        SpiderContext.isRunning = true;
-        SpiderThread.getInstance().mainTaskSubmit(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    SpiderUtils.spiderGo(spiderContext);
-                } catch (ParseException | IOException | InterruptedException e) {
-                    log.error(e);
-                }
-            }
-        });
-        SpiderThread.getInstance().scheduleTaskSubmit(new Runnable() {
-            @Override
-            public void run() {
-                progressBar.setProgress(Double.valueOf(SpiderUtils.nowNum.get()) / SpiderUtils.totalNum.get());
-            }
-        });
+//        SpiderContext.isRunning = true;
+        spiderThread = new Thread(() -> SpiderUtils.spiderGo(spiderContext));
+        SpiderThread.getInstance().mainTaskSubmit(spiderThread);
+        SpiderThread.getInstance().scheduleTaskSubmit(
+            () -> progressBar.setProgress(Double.valueOf(SpiderUtils.NOW_NUM.get()) / SpiderUtils.TOTAL_NUM.get()));
     }
 
     public void setQuestionId() {
@@ -91,7 +80,11 @@ public class SpiderController implements Initializable {
 
     @FXML
     public void stopSpider(ActionEvent event) {
-        SpiderContext.isRunning = false;
+//        SpiderContext.isRunning = false;
+        if (spiderThread != null) {
+            spiderThread.interrupt();
+            spiderThread = null;
+        }
     }
 
     @FXML

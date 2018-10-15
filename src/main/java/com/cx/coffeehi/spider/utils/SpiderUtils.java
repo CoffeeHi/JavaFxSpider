@@ -5,6 +5,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URISyntaxException;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -55,22 +56,44 @@ import lombok.extern.log4j.Log4j;
 @Log4j
 @lombok.Data
 public class SpiderUtils {
-    private static String zhUrlPrefix = "https://www.zhihu.com/api/v4/questions/id/answers";
-    public static AtomicLong nowNum = new AtomicLong(0);
-    public static AtomicLong totalNum = new AtomicLong(0);
+    private static String INCLUDE_PARAM =
+        "data[*].is_normal,admin_closed_comment,reward_info,is_collapsed,annotation_action,annotation_detail,collapse_reason,is_sticky,collapsed_by,suggest_edit,comment_count,can_comment,content,editable_content,voteup_count,reshipment_settings,comment_permission,created_time,updated_time,review_info,relevant_info,question,excerpt,relationship.is_authorized,is_author,voting,is_thanked,is_nothelp;data[*].mark_infos[*].url;data[*].author.follower_count,badge[*].topics";
+    private static String URL_PREFIX = "https://www.zhihu.com/api/v4/questions/id/answers";
+    public static AtomicLong NOW_NUM = new AtomicLong(0);
+    public static AtomicLong TOTAL_NUM = new AtomicLong(0);
 
     private class GetAnswer implements Runnable {
         private SpiderContext spiderContext;
-        private Data data;
+        private String httpUrl;
+        private Map<String, String> paramMap;
 
-        public GetAnswer(SpiderContext spiderContext, Data data) {
+        public GetAnswer(SpiderContext spiderContext, String httpUrl, Map<String, String> paramMap) {
             this.spiderContext = spiderContext;
-            this.data = data;
+            this.httpUrl = httpUrl;
+            this.paramMap = paramMap;
         }
 
         @Override
         public void run() {
-            log.info("Answers Num :" + nowNum.incrementAndGet());
+            String result = StringUtils.EMPTY;
+            try {
+                result = doGet(httpUrl, null, paramMap);
+            } catch (ParseException | IOException | InterruptedException e) {
+                log.error("HTTP URL: " + httpUrl);
+                log.error("DO GET ERROR : ", e);
+            }
+            Result resultObj = JSON.parseObject(result, new TypeReference<Result>() {});
+            Paging paging = resultObj.getPaging();
+            Long totals = paging.getTotals();
+            TOTAL_NUM.set(totals);
+            List<Data> datas = resultObj.getData();
+            for (Data data : datas) {
+                filterAnswer(data, spiderContext);
+            }
+        }
+
+        private void filterAnswer(Data data, SpiderContext spiderContext) {
+            log.info("Answers Num :" + NOW_NUM.incrementAndGet());
             if (data.getVoteup_count() < 10) {
                 return;
             }
@@ -89,7 +112,6 @@ public class SpiderUtils {
                         continue;
                     }
                 }
-//                log.info("picUrl: " + picUrl);
                 String suffix = picUrl.substring(picUrl.lastIndexOf("."));
                 String saveDir = spiderContext.getSavePath();
                 String anonymousName = "匿名-" + data.getId() + "-" + (picIndex++) + suffix;
@@ -123,83 +145,88 @@ public class SpiderUtils {
 
     }
 
-    public static void spiderGo(SpiderContext spiderContext) throws ParseException, IOException, InterruptedException {
+    public static void spiderGo(SpiderContext spiderContext) {
+        String httpUrl = URL_PREFIX.replace("id", spiderContext.getQuestionId());
+        TOTAL_NUM.set(getPaging(httpUrl));
         int limit = 20;
         int page = 0;
-        while (SpiderContext.isRunning) {
-            int offset = page * limit;
-            log.info("page: " + page + "; " + "limit: " + limit + ";" + "offset: " + offset);
-            Map<String, String> paramMap = Maps.newHashMap();
-            paramMap.put("include",
-                "data[*].is_normal,admin_closed_comment,reward_info,is_collapsed,annotation_action,annotation_detail,collapse_reason,is_sticky,collapsed_by,suggest_edit,comment_count,can_comment,content,editable_content,voteup_count,reshipment_settings,comment_permission,created_time,updated_time,review_info,relevant_info,question,excerpt,relationship.is_authorized,is_author,voting,is_thanked,is_nothelp;data[*].mark_infos[*].url;data[*].author.follower_count,badge[*].topics");
-            paramMap.put("limit", String.valueOf(limit));
+        int offset = 0;
+        Map<String, String> paramMap = Maps.newHashMap();
+        paramMap.put("include", INCLUDE_PARAM);
+        paramMap.put("limit", String.valueOf(limit));
+        paramMap.put("sort_by", "default");
+        do {
+            offset = (page++) * limit;
+            log.info("offset: " + offset);
             paramMap.put("offset", String.valueOf(offset));
-            paramMap.put("sort_by", "default");
-            page++;
-            String result = doGet(zhUrlPrefix.replace("id", spiderContext.getQuestionId()), paramMap);
-            Result resultObj = JSON.parseObject(result, new TypeReference<Result>() {});
-            Paging paging = resultObj.getPaging();
-            Long totals = paging.getTotals();
-            totalNum.set(totals);
-            List<Data> datas = resultObj.getData();
-            for (final Data data : datas) {
-                SpiderThread.getInstance().ansTaskSubmit(new SpiderUtils().new GetAnswer(spiderContext, data));
-            }
-            if (paging.getIs_end() && offset + limit > totals) {
-                break;
-            }
-        }
+            SpiderThread.getInstance()
+                .ansTaskSubmit(new SpiderUtils().new GetAnswer(spiderContext, httpUrl, paramMap));
+        } while (offset + limit < TOTAL_NUM.get());
     }
 
-    public static String doGet(String url, Map<String, String> map)
+    private static Long getPaging(String httpUrl) {
+        Map<String, String> paramMap = Maps.newHashMap();
+        paramMap.put("include", "");
+        paramMap.put("limit", "0");
+        paramMap.put("offset", "0");
+        paramMap.put("sort_by", "default");
+        String result = StringUtils.EMPTY;
+        try {
+            result = doGet(httpUrl, null, paramMap);
+        } catch (ParseException | IOException | InterruptedException e) {
+            log.error("HTTP URL: " + httpUrl);
+            log.error("DO GET ERROR : ", e);
+        }
+        Result resultObj = JSON.parseObject(result, new TypeReference<Result>() {});
+        Paging paging = resultObj.getPaging();
+        return paging.getTotals();
+    }
+
+    public static String doGet(String url, Map<String, String> cookieMap, Map<String, String> paramMap)
         throws ParseException, IOException, InterruptedException {
         CloseableHttpClient httpClient = null;
         HttpGet httpGet = null;
         String result = null;
         CloseableHttpResponse response = null;
+        // 构造cookie
         CookieStore cookieStore = new BasicCookieStore();
-        List<BasicClientCookie> cookies =
-            Lists.newArrayList(new BasicClientCookie("_xsrf", "iNEbyq5XRswkM3S8u7bkAY4iHkPLqz70"),
-                new BasicClientCookie("_zap", "iNEbyq5XRswkM3S8u7bkAY4iHkPLqz70"),
-                new BasicClientCookie("d_c0", "\"AAAotaVyWA6PTheLYUy_KuTRJ9U_RwAH7yM=|1539233802\""),
-                new BasicClientCookie("q_c1", "545aef250abc4b249f16db096845d7f4|1539233802000|1539233802000"),
-                new BasicClientCookie("capsion_ticket",
-                    "\"2|1:0|10:1539234096|14:capsion_ticket|44:NGRlMjIxNDVhYWI3NGY0Y2FiZDBiODVlOWNjNDg2MzU=|6999604e4eaa44d553d8fc7e22ab321a9861bff8b87bb3490a23e90e3a9590ae\""),
-                new BasicClientCookie("z_c0",
-                    "\"2|1:0|10:1539234202|4:z_c0|92:Mi4xbDlyN0FRQUFBQUFBQUNpMXBYSllEaVlBQUFCZ0FsVk5taWVzWEFENGYzTkVrT3JnbVpLSHhSakRmeHBwZmh0bldB|f499c13e473df36f1f8e5fe8260e7642fed9e177ea6aee1138f4ee7628622714\""),
-                new BasicClientCookie("tgw_l7_route", "61066e97b5b7b3b0daad1bff47134a22"));
-        for (BasicClientCookie cookie : cookies) {
-            // cookieStore.addCookie(cookie);
+        if (cookieMap != null) {
+            Iterator<Entry<String, String>> cookieIterator = cookieMap.entrySet().iterator();
+            while (cookieIterator.hasNext()) {
+                Entry<String, String> entry = cookieIterator.next();
+                cookieStore.addCookie(new BasicClientCookie(entry.getKey(), entry.getValue()));
+            }
         }
         // 构造Headers
         List<Header> headerList = Lists.newArrayList();
         // headerList.add(new BasicHeader(HttpHeaders.ACCEPT_ENCODING,"gzip, deflate, br"));
+        // headerList.add(new BasicHeader(HttpHeaders.USER_AGENT, "Mozilla/5.0 (Windows NT 6.1; WOW64)
+        // AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36"));
         headerList.add(new BasicHeader(HttpHeaders.ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9"));
         headerList.add(new BasicHeader(HttpHeaders.CONNECTION, "keep-alive"));
         headerList.add(new BasicHeader("x-udid", "AAAotaVyWA6PTheLYUy_KuTRJ9U_RwAH7yM="));
         headerList.add(new BasicHeader("x-requested-with", "fetch"));
         headerList.add(new BasicHeader("content-type", "application/json"));
-        // headerList.add(new BasicHeader(HttpHeaders.USER_AGENT, "Mozilla/5.0 (Windows NT 6.1; WOW64)
-        // AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36"));
-
+        // 构造传参
+        List<NameValuePair> paramList = Lists.newArrayList();
+        if (paramMap != null) {
+            Iterator<Map.Entry<String, String>> iterator = paramMap.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Entry<String, String> elem = iterator.next();
+                paramList.add(new BasicNameValuePair(elem.getKey(), elem.getValue()));
+            }
+            if (!paramList.isEmpty()) {
+                String str = EntityUtils.toString(new UrlEncodedFormEntity(paramList, Consts.UTF_8));
+                url = url + "?" + str;
+            }
+        }
         httpClient = HttpClients.custom().setDefaultHeaders(headerList).setDefaultCookieStore(cookieStore).build();
         httpGet = new HttpGet(url);
-        List<NameValuePair> list = Lists.newArrayList();
-        Iterator<Map.Entry<String, String>> iterator = map.entrySet().iterator();
-        while (iterator.hasNext()) {
-            Entry<String, String> elem = iterator.next();
-            list.add(new BasicNameValuePair(elem.getKey(), elem.getValue()));
-        }
-        if (list.size() > 0) {
-            String str = EntityUtils.toString(new UrlEncodedFormEntity(list, Consts.UTF_8));
-            url = url + "?" + str;
-            httpGet = new HttpGet(url);
-        }
         while (response == null) {
             try {
                 response = httpClient.execute(httpGet);
             } catch (Exception e) {
-                Thread.currentThread().sleep(500);
+                Thread.sleep(500);
                 log.error("HTTP GET ERROR : ", e);
             }
         }
@@ -217,7 +244,7 @@ public class SpiderUtils {
                     log.info("fuck br");
                 }
             }
-            result = EntityUtils.toString(entity, Consts.UTF_8);// 获得返回的结果
+            result = EntityUtils.toString(entity, Consts.UTF_8);
         }
         return result;
     }
@@ -225,42 +252,34 @@ public class SpiderUtils {
     // picUrl 图片连接，name 图片名称，imgPath 图片要保存的地址
     public static void downloadImg(String picUrl, String saveDir, String imgName)
         throws ClientProtocolException, IOException {
-        CloseableHttpClient httpclient = HttpClients.createDefault();
-        try {
-            HttpGet get = new HttpGet(picUrl);
-            HttpResponse response = httpclient.execute(get);
+        HttpGet get = new HttpGet(picUrl);
+        String absolutePath = saveDir + "\\" + imgName;
+        log.debug("FilePath: " + absolutePath);
+        File file = new File(absolutePath);
+        try (CloseableHttpClient httpclient = HttpClients.createDefault();
+            CloseableHttpResponse response = httpclient.execute(get);
+            FileOutputStream fout = new FileOutputStream(file);) {
             HttpEntity entity = response.getEntity();
             InputStream in = entity.getContent();
-            String absolutePath = saveDir + "\\" + imgName;
-            log.info("FilePath: " + absolutePath);
-            File file = new File(absolutePath);
-            try {
-                if (!file.exists()) {
-                    file.createNewFile();
-                } else {
-                    log.info("contentLength: " + entity.getContentLength());
-                    log.info("fileName: " + file.getName() + "fileExistedLength: " + file.length());
-                    if (entity.getContentLength() == file.length()) {
-                        return;
-                    }
+            if (!file.exists()) {
+                file.createNewFile();
+            } else {
+                log.debug("contentLength: " + entity.getContentLength());
+                log.debug("fileName: " + file.getName() + " fileExistedLength: " + file.length());
+                if (entity.getContentLength() == file.length()) {
+                    return;
                 }
-                FileOutputStream fout = new FileOutputStream(file);
-                int l = -1;
-                byte[] tmp = new byte[1024];
-                while ((l = in.read(tmp)) != -1) {
-                    fout.write(tmp, 0, l);
-                }
-                fout.flush();
-                fout.close();
-            } finally {
-                // 关闭低层流。
-                in.close();
             }
-        } catch (Exception e1) {
-            e1.printStackTrace();
-            log.info("下载图片出错" + picUrl);
+            int len = -1;
+            byte[] tmp = new byte[1024];
+            while ((len = in.read(tmp)) != -1) {
+                fout.write(tmp, 0, len);
+            }
+            fout.flush();
+        } catch (Exception e) {
+            log.error("下载图片出错" + picUrl);
+            log.error("下载图片出错", e);
         }
-        httpclient.close();
     }
 
 }
