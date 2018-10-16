@@ -14,7 +14,7 @@ import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import lombok.extern.log4j.Log4j;
 @Log4j
 public class SpiderThread {
-    private ScheduledExecutorService scheduleService;
+    private static ScheduledExecutorService scheduleService;
     private static ThreadPoolExecutor mainTaskExecutor;
     private static ThreadPoolExecutor answerTaskExecutor;
     private static ThreadPoolExecutor picTaskExecutor;
@@ -22,10 +22,10 @@ public class SpiderThread {
     private SpiderThread() {
         UncaughtExceptionHandler scheduleUnExceHandler = new UncaughtExceptionHandler() {
             public void uncaughtException(Thread thread, Throwable throwable) {
-                log.error("scheduledTaskExecutor error : ", throwable);
+                log.error("scheduleTaskExecutor error : ", throwable);
             }
         };
-        ThreadFactory scheduleThreadFactory = new ThreadFactoryBuilder().setDaemon(true).setNameFormat("scheduled-task")
+        ThreadFactory scheduleThreadFactory = new ThreadFactoryBuilder().setDaemon(true).setNameFormat("schedule-task-t%d")
             .setUncaughtExceptionHandler(scheduleUnExceHandler).build();
         scheduleService = Executors.newSingleThreadScheduledExecutor(scheduleThreadFactory);
         
@@ -35,7 +35,7 @@ public class SpiderThread {
             }
         };
         BlockingQueue<Runnable> mainQueue = new LinkedBlockingQueue<Runnable>(1);
-        ThreadFactory mainThreadFactory = new ThreadFactoryBuilder().setDaemon(true).setNameFormat("main-task")
+        ThreadFactory mainThreadFactory = new ThreadFactoryBuilder().setDaemon(true).setNameFormat("main-task-t%d")
             .setUncaughtExceptionHandler(mainUnExceHandler).build();
         mainTaskExecutor = new ThreadPoolExecutor(1, 1, 5L, TimeUnit.SECONDS, mainQueue, mainThreadFactory);
         
@@ -44,20 +44,20 @@ public class SpiderThread {
                 log.error("ansUnExceHandler error : ", throwable);
             }
         };
-        BlockingQueue<Runnable> answerQueue = new LinkedBlockingQueue<Runnable>(1000);
-        ThreadFactory ansThreadFactory = new ThreadFactoryBuilder().setDaemon(true).setNameFormat("answer-task")
+        BlockingQueue<Runnable> answerQueue = new LinkedBlockingQueue<Runnable>(2000);
+        ThreadFactory ansThreadFactory = new ThreadFactoryBuilder().setDaemon(true).setNameFormat("answer-task-t%d")
             .setUncaughtExceptionHandler(ansUnExceHandler).build();
-        answerTaskExecutor = new ThreadPoolExecutor(10, 20, 5L, TimeUnit.SECONDS, answerQueue, ansThreadFactory);
+        answerTaskExecutor = new ThreadPoolExecutor(20, 20, 5L, TimeUnit.SECONDS, answerQueue, ansThreadFactory);
         
         UncaughtExceptionHandler picUnExceHandler = new UncaughtExceptionHandler() {
             public void uncaughtException(Thread thread, Throwable throwable) {
                 log.error("picTaskExecutor error : ", throwable);
             }
         };
-        BlockingQueue<Runnable> picQueue = new LinkedBlockingQueue<Runnable>(1000);
-        ThreadFactory picThreadFactory = new ThreadFactoryBuilder().setDaemon(true).setNameFormat("pic-task")
+        BlockingQueue<Runnable> picQueue = new LinkedBlockingQueue<Runnable>(2000);
+        ThreadFactory picThreadFactory = new ThreadFactoryBuilder().setDaemon(true).setNameFormat("pic-task-t%d")
             .setUncaughtExceptionHandler(picUnExceHandler).build();
-        picTaskExecutor = new ThreadPoolExecutor(50, 50, 5L, TimeUnit.SECONDS, picQueue, picThreadFactory);
+        picTaskExecutor = new ThreadPoolExecutor(40, 40, 5L, TimeUnit.SECONDS, picQueue, picThreadFactory);
     }
     
     private volatile static SpiderThread instance =  null;
@@ -98,6 +98,21 @@ public class SpiderThread {
         }
         if (mainTaskExecutor != null) {
             mainTaskExecutor.shutdown();
+        }
+        if (scheduleService != null) {
+            scheduleService.shutdown();
+        }
+    }
+
+    public void close() {
+        if (answerTaskExecutor != null) {
+            answerTaskExecutor.getQueue().clear();
+        }
+        if (picTaskExecutor != null) {
+            picTaskExecutor.getQueue().clear();
+        }
+        if (mainTaskExecutor != null) {
+            mainTaskExecutor.getQueue().clear();
         }
         if (scheduleService != null) {
             scheduleService.shutdown();

@@ -38,6 +38,7 @@ import javafx.scene.control.CheckBox;
 @Log4j
 public class SpiderController implements Initializable {
     private Thread spiderThread;
+    private Thread progressThread;
     private SpiderContext spiderContext;
     @FXML
     private Button startSpider;
@@ -60,12 +61,11 @@ public class SpiderController implements Initializable {
 
     @FXML
     public void startSpider(ActionEvent event) {
+        log.info("START SPIDER");
         setQuestionId();
-//        SpiderContext.isRunning = true;
-        spiderThread = new Thread(() -> SpiderUtils.spiderGo(spiderContext));
+        // SpiderContext.isRunning = true;
         SpiderThread.getInstance().mainTaskSubmit(spiderThread);
-        SpiderThread.getInstance().scheduleTaskSubmit(
-            () -> progressBar.setProgress(Double.valueOf(SpiderUtils.NOW_NUM.get()) / SpiderUtils.TOTAL_NUM.get()));
+        SpiderThread.getInstance().scheduleTaskSubmit(progressThread);
     }
 
     public void setQuestionId() {
@@ -80,11 +80,13 @@ public class SpiderController implements Initializable {
 
     @FXML
     public void stopSpider(ActionEvent event) {
-//        SpiderContext.isRunning = false;
-        if (spiderThread != null) {
-            spiderThread.interrupt();
-            spiderThread = null;
-        }
+        log.info("STOP SPIDER");
+        // SpiderContext.isRunning = false;
+        spiderThread.interrupt();
+        SpiderUtils.NOW_NUM.set(0);
+        SpiderUtils.TOTAL_NUM.set(0);
+        progressBar.setProgress(0);
+        SpiderThread.getInstance().close();
     }
 
     @FXML
@@ -115,6 +117,9 @@ public class SpiderController implements Initializable {
     @Override
     public void initialize(URL location, ResourceBundle resources) {
         spiderContext = new SpiderContext();
+        spiderThread = new Thread(() -> SpiderUtils.spiderGo(spiderContext));
+        progressThread = new Thread(
+            () -> progressBar.setProgress(Double.valueOf(SpiderUtils.NOW_NUM.get()) / SpiderUtils.TOTAL_NUM.get()));
     }
 
 }

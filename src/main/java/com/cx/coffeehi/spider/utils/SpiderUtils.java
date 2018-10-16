@@ -10,6 +10,10 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -66,35 +70,45 @@ public class SpiderUtils {
         private SpiderContext spiderContext;
         private String httpUrl;
         private Map<String, String> paramMap;
+        private Semaphore semaphore;
 
-        public GetAnswer(SpiderContext spiderContext, String httpUrl, Map<String, String> paramMap) {
+        public GetAnswer(SpiderContext spiderContext, String httpUrl, Map<String, String> paramMap,
+            Semaphore semaphore) {
             this.spiderContext = spiderContext;
             this.httpUrl = httpUrl;
             this.paramMap = paramMap;
+            this.semaphore = semaphore;
         }
 
         @Override
         public void run() {
             String result = StringUtils.EMPTY;
-            try {
-                result = doGet(httpUrl, null, paramMap);
-            } catch (ParseException | IOException | InterruptedException e) {
-                log.error("HTTP URL: " + httpUrl);
-                log.error("DO GET ERROR : ", e);
+            result = doGet(httpUrl, null, paramMap);
+            if (result == null) {
+                return;
             }
             Result resultObj = JSON.parseObject(result, new TypeReference<Result>() {});
             Paging paging = resultObj.getPaging();
             Long totals = paging.getTotals();
             TOTAL_NUM.set(totals);
             List<Data> datas = resultObj.getData();
+            CountDownLatch latch = new CountDownLatch(datas.size());
             for (Data data : datas) {
-                filterAnswer(data, spiderContext);
+                filterAnswer(data, spiderContext, latch);
+            }
+            try {
+                latch.await();
+                semaphore.release();
+                log.info("semaphore release, availablePermits: " + semaphore.availablePermits());
+            } catch (InterruptedException e) {
+                log.error("latch await error : ", e);
             }
         }
 
-        private void filterAnswer(Data data, SpiderContext spiderContext) {
+        private void filterAnswer(Data data, SpiderContext spiderContext, CountDownLatch latch) {
             log.info("Answers Num :" + NOW_NUM.incrementAndGet());
             if (data.getVoteup_count() < 10) {
+                latch.countDown();
                 return;
             }
             Author author = data.getAuthor();
@@ -119,6 +133,7 @@ public class SpiderUtils {
                 String picName = isAnonymous ? anonymousName : normalName;
                 SpiderThread.getInstance().picTaskSubmit(new GetPics(picUrl, saveDir, picName));
             }
+            latch.countDown();
         }
     }
 
@@ -155,12 +170,20 @@ public class SpiderUtils {
         paramMap.put("include", INCLUDE_PARAM);
         paramMap.put("limit", String.valueOf(limit));
         paramMap.put("sort_by", "default");
+        // 最多同时进行100个回答的图片下载
+        Semaphore semaphore = new Semaphore(10, true);
+        // CyclicBarrier answerBarrier = new CyclicBarrier(limit);
         do {
             offset = (page++) * limit;
             log.info("offset: " + offset);
             paramMap.put("offset", String.valueOf(offset));
+            try {
+                semaphore.acquire();
+            } catch (InterruptedException e) {
+                log.error("semaphore acquire error : ", e);
+            }
             SpiderThread.getInstance()
-                .ansTaskSubmit(new SpiderUtils().new GetAnswer(spiderContext, httpUrl, paramMap));
+                .ansTaskSubmit(new SpiderUtils().new GetAnswer(spiderContext, httpUrl, paramMap, semaphore));
         } while (offset + limit < TOTAL_NUM.get());
     }
 
@@ -170,24 +193,13 @@ public class SpiderUtils {
         paramMap.put("limit", "0");
         paramMap.put("offset", "0");
         paramMap.put("sort_by", "default");
-        String result = StringUtils.EMPTY;
-        try {
-            result = doGet(httpUrl, null, paramMap);
-        } catch (ParseException | IOException | InterruptedException e) {
-            log.error("HTTP URL: " + httpUrl);
-            log.error("DO GET ERROR : ", e);
-        }
+        String result = doGet(httpUrl, null, paramMap);
         Result resultObj = JSON.parseObject(result, new TypeReference<Result>() {});
         Paging paging = resultObj.getPaging();
         return paging.getTotals();
     }
 
-    public static String doGet(String url, Map<String, String> cookieMap, Map<String, String> paramMap)
-        throws ParseException, IOException, InterruptedException {
-        CloseableHttpClient httpClient = null;
-        HttpGet httpGet = null;
-        String result = null;
-        CloseableHttpResponse response = null;
+    public static String doGet(String url, Map<String, String> cookieMap, Map<String, String> paramMap) {
         // 构造cookie
         CookieStore cookieStore = new BasicCookieStore();
         if (cookieMap != null) {
@@ -203,9 +215,9 @@ public class SpiderUtils {
         // headerList.add(new BasicHeader(HttpHeaders.USER_AGENT, "Mozilla/5.0 (Windows NT 6.1; WOW64)
         // AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36"));
         headerList.add(new BasicHeader(HttpHeaders.ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9"));
-        headerList.add(new BasicHeader(HttpHeaders.CONNECTION, "keep-alive"));
-        headerList.add(new BasicHeader("x-udid", "AAAotaVyWA6PTheLYUy_KuTRJ9U_RwAH7yM="));
-        headerList.add(new BasicHeader("x-requested-with", "fetch"));
+        // headerList.add(new BasicHeader(HttpHeaders.CONNECTION, "keep-alive"));
+        // headerList.add(new BasicHeader("x-udid", "AAAotaVyWA6PTheLYUy_KuTRJ9U_RwAH7yM="));
+        // headerList.add(new BasicHeader("x-requested-with", "fetch"));
         headerList.add(new BasicHeader("content-type", "application/json"));
         // 构造传参
         List<NameValuePair> paramList = Lists.newArrayList();
@@ -216,69 +228,86 @@ public class SpiderUtils {
                 paramList.add(new BasicNameValuePair(elem.getKey(), elem.getValue()));
             }
             if (!paramList.isEmpty()) {
-                String str = EntityUtils.toString(new UrlEncodedFormEntity(paramList, Consts.UTF_8));
+                String str = "";
+                try {
+                    str = EntityUtils.toString(new UrlEncodedFormEntity(paramList, Consts.UTF_8));
+                } catch (Exception e) {
+                    log.error("UrlEncodedFormEntity ERROR: ", e);
+                }
                 url = url + "?" + str;
             }
         }
-        httpClient = HttpClients.custom().setDefaultHeaders(headerList).setDefaultCookieStore(cookieStore).build();
-        httpGet = new HttpGet(url);
-        while (response == null) {
-            try {
-                response = httpClient.execute(httpGet);
-            } catch (Exception e) {
-                Thread.sleep(500);
-                log.error("HTTP GET ERROR : ", e);
-            }
-        }
-        if (response.getStatusLine().getStatusCode() == HttpStatus.SC_OK) {
-            log.info("HTTP STATUS : " + response.getStatusLine());
-            HttpEntity entity = response.getEntity();
-            Header contentEncoding = entity.getContentEncoding();
-            if (contentEncoding != null) {
-                String encode = contentEncoding.getValue();
-                if ("gzip".equalsIgnoreCase(encode)) {
-                    entity = new GzipDecompressingEntity(entity);
-                } else if ("deflate".equalsIgnoreCase(encode)) {
-                    entity = new DeflateDecompressingEntity(entity);
-                } else if ("br".equalsIgnoreCase(encode)) {
-                    log.info("fuck br");
+        String result = null;
+        HttpGet httpGet = new HttpGet(url);
+        int tryTimes = 3;
+        while (tryTimes-- > 0) {
+            try (
+                CloseableHttpClient httpClient =
+                    HttpClients.custom().setDefaultHeaders(headerList).setDefaultCookieStore(cookieStore).build();
+                CloseableHttpResponse response = httpClient.execute(httpGet);) {
+                if (response.getStatusLine().getStatusCode() != HttpStatus.SC_OK) {
+                    break;
                 }
+                log.info("HTTP STATUS : " + response.getStatusLine());
+                HttpEntity entity = response.getEntity();
+                Header contentEncoding = entity.getContentEncoding();
+                if (contentEncoding != null) {
+                    String encode = contentEncoding.getValue();
+                    if ("gzip".equalsIgnoreCase(encode)) {
+                        entity = new GzipDecompressingEntity(entity);
+                    } else if ("deflate".equalsIgnoreCase(encode)) {
+                        entity = new DeflateDecompressingEntity(entity);
+                    } else if ("br".equalsIgnoreCase(encode)) {
+                        log.info("fuck br");
+                    }
+                }
+                result = EntityUtils.toString(entity, Consts.UTF_8);
+                break;
+            } catch (Exception e) {
+                log.error("HTTP URL: " + url);
+                log.error("DO GET ERROR: ", e);
             }
-            result = EntityUtils.toString(entity, Consts.UTF_8);
         }
         return result;
     }
 
     // picUrl 图片连接，name 图片名称，imgPath 图片要保存的地址
-    public static void downloadImg(String picUrl, String saveDir, String imgName)
-        throws ClientProtocolException, IOException {
+    public static void downloadImg(String picUrl, String saveDir, String imgName) {
         HttpGet get = new HttpGet(picUrl);
         String absolutePath = saveDir + "\\" + imgName;
         log.debug("FilePath: " + absolutePath);
         File file = new File(absolutePath);
-        try (CloseableHttpClient httpclient = HttpClients.createDefault();
-            CloseableHttpResponse response = httpclient.execute(get);
-            FileOutputStream fout = new FileOutputStream(file);) {
-            HttpEntity entity = response.getEntity();
-            InputStream in = entity.getContent();
-            if (!file.exists()) {
-                file.createNewFile();
-            } else {
-                log.debug("contentLength: " + entity.getContentLength());
-                log.debug("fileName: " + file.getName() + " fileExistedLength: " + file.length());
-                if (entity.getContentLength() == file.length()) {
-                    return;
+        int tryTimes = 3;
+        while (tryTimes-- > 0) {
+            try (CloseableHttpClient httpclient = HttpClients.createDefault();
+                CloseableHttpResponse response = httpclient.execute(get);
+                FileOutputStream fout = new FileOutputStream(file);) {
+                if (response.getStatusLine().getStatusCode() != HttpStatus.SC_OK) {
+                    break;
                 }
+                HttpEntity entity = response.getEntity();
+                InputStream in = entity.getContent();
+                if (!file.exists()) {
+                    file.createNewFile();
+                } else {
+                    log.debug("contentLength: " + entity.getContentLength());
+                    log.debug("fileName: " + file.getName() + ", fileExistedLength: " + file.length());
+                    if (entity.getContentLength() == file.length()) {
+                        return;
+                    }
+                }
+                int len = -1;
+                byte[] tmp = new byte[1024];
+                while ((len = in.read(tmp)) != -1) {
+                    fout.write(tmp, 0, len);
+                }
+                fout.flush();
+                break;
+            } catch (Exception e) {
+                log.error("下载图片出错" + absolutePath);
+                log.error("下载图片出错" + picUrl);
+                log.error("下载图片出错", e);
             }
-            int len = -1;
-            byte[] tmp = new byte[1024];
-            while ((len = in.read(tmp)) != -1) {
-                fout.write(tmp, 0, len);
-            }
-            fout.flush();
-        } catch (Exception e) {
-            log.error("下载图片出错" + picUrl);
-            log.error("下载图片出错", e);
         }
     }
 
