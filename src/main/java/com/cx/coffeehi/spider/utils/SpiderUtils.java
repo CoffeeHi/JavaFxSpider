@@ -65,50 +65,42 @@ public class SpiderUtils {
     private static String URL_PREFIX = "https://www.zhihu.com/api/v4/questions/id/answers";
     public static AtomicLong NOW_NUM = new AtomicLong(0);
     public static AtomicLong TOTAL_NUM = new AtomicLong(0);
+    /**
+     * 最多10张图片同时下载
+     */
+    private static Semaphore semaphore = new Semaphore(20, false);
+
 
     private class GetAnswer implements Runnable {
         private SpiderContext spiderContext;
         private String httpUrl;
         private Map<String, String> paramMap;
-        private Semaphore semaphore;
 
-        public GetAnswer(SpiderContext spiderContext, String httpUrl, Map<String, String> paramMap,
-            Semaphore semaphore) {
+        public GetAnswer(SpiderContext spiderContext, String httpUrl, Map<String, String> paramMap) {
             this.spiderContext = spiderContext;
             this.httpUrl = httpUrl;
             this.paramMap = paramMap;
-            this.semaphore = semaphore;
         }
 
         @Override
         public void run() {
-            String result = StringUtils.EMPTY;
-            result = doGet(httpUrl, null, paramMap);
-            if (result == null) {
+            String result = doGet(httpUrl, null, paramMap);
+            if (StringUtils.isEmpty(result)) {
                 return;
             }
             Result resultObj = JSON.parseObject(result, new TypeReference<Result>() {});
             Paging paging = resultObj.getPaging();
             Long totals = paging.getTotals();
             TOTAL_NUM.set(totals);
-            List<Data> datas = resultObj.getData();
-            CountDownLatch latch = new CountDownLatch(datas.size());
-            for (Data data : datas) {
-                filterAnswer(data, spiderContext, latch);
-            }
-            try {
-                latch.await();
-                semaphore.release();
-                log.info("semaphore release, availablePermits: " + semaphore.availablePermits());
-            } catch (InterruptedException e) {
-                log.error("latch await error : ", e);
+            List<Data> dataList = resultObj.getData();
+            for (Data data : dataList) {
+                filterAnswer(data, spiderContext);
             }
         }
 
-        private void filterAnswer(Data data, SpiderContext spiderContext, CountDownLatch latch) {
-            log.info("Answers Num :" + NOW_NUM.incrementAndGet());
+        private void filterAnswer(Data data, SpiderContext spiderContext) {
             if (data.getVoteup_count() < 10) {
-                latch.countDown();
+                log.info("Answers Num :" + NOW_NUM.incrementAndGet());
                 return;
             }
             Author author = data.getAuthor();
@@ -117,12 +109,15 @@ public class SpiderUtils {
             Elements pics = doc.select("img[src~=(?i).(png|jpe?g)]");
             int picIndex = 1;
             boolean isAnonymous = "匿名用户".equals(author.getName());
+            CountDownLatch latch = new CountDownLatch(pics.size());
             for (Element pic : pics) {
+                log.info("data id: " + data.getId() + ", latch await :" + latch.getCount());
                 String picUrl = pic.attr("data-original");
                 if (StringUtils.isEmpty(picUrl)) {
                     picUrl = pic.attr("src");
                     String picClass = pic.attr("class");
                     if (StringUtils.isEmpty(picUrl) || !"thumbnail".equals(picClass)) {
+                        latch.countDown();
                         continue;
                     }
                 }
@@ -131,33 +126,25 @@ public class SpiderUtils {
                 String anonymousName = "匿名-" + data.getId() + "-" + (picIndex++) + suffix;
                 String normalName = author.getName() + "-" + data.getId() + "-" + (picIndex++) + suffix;
                 String picName = isAnonymous ? anonymousName : normalName;
-                SpiderThread.getInstance().picTaskSubmit(new GetPics(picUrl, saveDir, picName));
+                final String finalPicUrl = picUrl;
+                SpiderThread.getInstance().picTaskSubmit(()->{
+                    try {
+                        semaphore.acquire();
+                    } catch (InterruptedException e) {
+                        log.error("semaphore error : ", e);
+                    }
+                    downloadImg(finalPicUrl, saveDir, picName);
+                    latch.countDown();
+                    semaphore.release();
+                });
             }
-            latch.countDown();
-        }
-    }
-
-    private class GetPics implements Runnable {
-
-        private String picUrl;
-        private String saveDir;
-        private String picName;
-
-        public GetPics(String picUrl, String saveDir, String picName) {
-            this.picUrl = picUrl;
-            this.saveDir = saveDir;
-            this.picName = picName;
-        }
-
-        @Override
-        public void run() {
             try {
-                downloadImg(picUrl, saveDir, picName);
-            } catch (Exception e) {
-                log.error(e);
+                latch.await();
+                log.info("Answers Num :" + NOW_NUM.incrementAndGet());
+            } catch (InterruptedException e) {
+                log.error("latch await error : ", e);
             }
         }
-
     }
 
     public static void spiderGo(SpiderContext spiderContext) {
@@ -165,25 +152,17 @@ public class SpiderUtils {
         TOTAL_NUM.set(getPaging(httpUrl));
         int limit = 20;
         int page = 0;
-        int offset = 0;
+        int offset;
         Map<String, String> paramMap = Maps.newHashMap();
         paramMap.put("include", INCLUDE_PARAM);
         paramMap.put("limit", String.valueOf(limit));
         paramMap.put("sort_by", "default");
-        // 最多同时进行100个回答的图片下载
-        Semaphore semaphore = new Semaphore(10, true);
-        // CyclicBarrier answerBarrier = new CyclicBarrier(limit);
         do {
             offset = (page++) * limit;
             log.info("offset: " + offset);
             paramMap.put("offset", String.valueOf(offset));
-            try {
-                semaphore.acquire();
-            } catch (InterruptedException e) {
-                log.error("semaphore acquire error : ", e);
-            }
             SpiderThread.getInstance()
-                .ansTaskSubmit(new SpiderUtils().new GetAnswer(spiderContext, httpUrl, paramMap, semaphore));
+                    .ansTaskSubmit(new SpiderUtils().new GetAnswer(spiderContext, httpUrl, paramMap));
         } while (offset + limit < TOTAL_NUM.get());
     }
 
@@ -199,13 +178,11 @@ public class SpiderUtils {
         return paging.getTotals();
     }
 
-    public static String doGet(String url, Map<String, String> cookieMap, Map<String, String> paramMap) {
+    private static String doGet(String url, Map<String, String> cookieMap, Map<String, String> paramMap) {
         // 构造cookie
         CookieStore cookieStore = new BasicCookieStore();
         if (cookieMap != null) {
-            Iterator<Entry<String, String>> cookieIterator = cookieMap.entrySet().iterator();
-            while (cookieIterator.hasNext()) {
-                Entry<String, String> entry = cookieIterator.next();
+            for (Entry<String, String> entry : cookieMap.entrySet()) {
                 cookieStore.addCookie(new BasicClientCookie(entry.getKey(), entry.getValue()));
             }
         }
@@ -222,9 +199,7 @@ public class SpiderUtils {
         // 构造传参
         List<NameValuePair> paramList = Lists.newArrayList();
         if (paramMap != null) {
-            Iterator<Map.Entry<String, String>> iterator = paramMap.entrySet().iterator();
-            while (iterator.hasNext()) {
-                Entry<String, String> elem = iterator.next();
+            for (Entry<String, String> elem : paramMap.entrySet()) {
                 paramList.add(new BasicNameValuePair(elem.getKey(), elem.getValue()));
             }
             if (!paramList.isEmpty()) {
@@ -244,7 +219,7 @@ public class SpiderUtils {
             try (
                 CloseableHttpClient httpClient =
                     HttpClients.custom().setDefaultHeaders(headerList).setDefaultCookieStore(cookieStore).build();
-                CloseableHttpResponse response = httpClient.execute(httpGet);) {
+                CloseableHttpResponse response = httpClient.execute(httpGet)) {
                 if (response.getStatusLine().getStatusCode() != HttpStatus.SC_OK) {
                     break;
                 }
@@ -272,7 +247,7 @@ public class SpiderUtils {
     }
 
     // picUrl 图片连接，name 图片名称，imgPath 图片要保存的地址
-    public static void downloadImg(String picUrl, String saveDir, String imgName) {
+    private static void downloadImg(String picUrl, String saveDir, String imgName) {
         HttpGet get = new HttpGet(picUrl);
         String absolutePath = saveDir + "\\" + imgName;
         log.debug("FilePath: " + absolutePath);
@@ -281,14 +256,16 @@ public class SpiderUtils {
         while (tryTimes-- > 0) {
             try (CloseableHttpClient httpclient = HttpClients.createDefault();
                 CloseableHttpResponse response = httpclient.execute(get);
-                FileOutputStream fout = new FileOutputStream(file);) {
+                FileOutputStream fout = new FileOutputStream(file)) {
                 if (response.getStatusLine().getStatusCode() != HttpStatus.SC_OK) {
                     break;
                 }
                 HttpEntity entity = response.getEntity();
                 InputStream in = entity.getContent();
                 if (!file.exists()) {
-                    file.createNewFile();
+                    if (!file.createNewFile()) {
+                        continue;
+                    }
                 } else {
                     log.debug("contentLength: " + entity.getContentLength());
                     log.debug("fileName: " + file.getName() + ", fileExistedLength: " + file.length());
@@ -296,7 +273,7 @@ public class SpiderUtils {
                         return;
                     }
                 }
-                int len = -1;
+                int len;
                 byte[] tmp = new byte[1024];
                 while ((len = in.read(tmp)) != -1) {
                     fout.write(tmp, 0, len);
