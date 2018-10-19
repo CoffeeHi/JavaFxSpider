@@ -63,12 +63,11 @@ public class SpiderController implements Initializable {
     public void startSpider(ActionEvent event) {
         log.info("START SPIDER");
         setQuestionId();
-        // SpiderContext.isRunning = true;
         SpiderThread.getInstance().mainTaskSubmit(spiderThread);
         SpiderThread.getInstance().scheduleTaskSubmit(progressThread);
     }
 
-    public void setQuestionId() {
+    private void setQuestionId() {
         String originQueId = questionId.getText();
         log.info("question id:" + originQueId);
         if (!StringUtils.isEmpty(originQueId)) {
@@ -81,7 +80,6 @@ public class SpiderController implements Initializable {
     @FXML
     public void stopSpider(ActionEvent event) {
         log.info("STOP SPIDER");
-        // SpiderContext.isRunning = false;
         spiderThread.interrupt();
         SpiderUtils.NOW_NUM.set(0);
         SpiderUtils.TOTAL_NUM.set(0);
@@ -106,7 +104,8 @@ public class SpiderController implements Initializable {
         DirectoryChooser directoryChooser = new DirectoryChooser();
         File file = directoryChooser.showDialog(MainLauncher.getPrimaryStage());
         if (file != null) {
-            String path = file.getPath();// 选择的文件夹路径
+            // 选择的文件夹路径
+            String path = file.getPath();
             if (!StringUtils.isEmpty(path)) {
                 savePath.setText(path);
                 spiderContext.setSavePath(path);
@@ -119,7 +118,7 @@ public class SpiderController implements Initializable {
         spiderContext = new SpiderContext();
         spiderThread = new Thread(() -> SpiderUtils.spiderGo(spiderContext));
         progressThread = new Thread(
-            () -> progressBar.setProgress(Double.valueOf(SpiderUtils.NOW_NUM.get()) / SpiderUtils.TOTAL_NUM.get()));
+            () -> progressBar.setProgress((double) SpiderUtils.NOW_NUM.get() / SpiderUtils.TOTAL_NUM.get()));
     }
 
 }

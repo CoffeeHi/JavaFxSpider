@@ -263,9 +263,7 @@ public class SpiderUtils {
                 HttpEntity entity = response.getEntity();
                 InputStream in = entity.getContent();
                 if (!file.exists()) {
-                    if (!file.createNewFile()) {
-                        continue;
-                    }
+                    file.createNewFile();
                 } else {
                     log.debug("contentLength: " + entity.getContentLength());
                     log.debug("fileName: " + file.getName() + ", fileExistedLength: " + file.length());

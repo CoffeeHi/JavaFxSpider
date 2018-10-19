@@ -4,7 +4,6 @@ import lombok.Data;
 
 @Data
 public class SpiderContext {
-    public volatile static boolean isRunning;
     private String savePath;
     private boolean ifCheckVideo;
     private boolean ifCheckPic;
