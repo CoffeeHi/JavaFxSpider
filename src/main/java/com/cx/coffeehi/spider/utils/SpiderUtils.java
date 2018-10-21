@@ -63,10 +63,11 @@ public class SpiderUtils {
     private static String INCLUDE_PARAM =
         "data[*].is_normal,admin_closed_comment,reward_info,is_collapsed,annotation_action,annotation_detail,collapse_reason,is_sticky,collapsed_by,suggest_edit,comment_count,can_comment,content,editable_content,voteup_count,reshipment_settings,comment_permission,created_time,updated_time,review_info,relevant_info,question,excerpt,relationship.is_authorized,is_author,voting,is_thanked,is_nothelp;data[*].mark_infos[*].url;data[*].author.follower_count,badge[*].topics";
     private static String URL_PREFIX = "https://www.zhihu.com/api/v4/questions/id/answers";
+    private static String VIDEO_URL = "https://www.zhihu.com/api/v4/questions/id/answers";
     public static AtomicLong NOW_NUM = new AtomicLong(0);
     public static AtomicLong TOTAL_NUM = new AtomicLong(0);
     /**
-     * 最多10张图片同时下载
+     * 最多20张图片同时下载
      */
     private static Semaphore semaphore = new Semaphore(20, false);
 
