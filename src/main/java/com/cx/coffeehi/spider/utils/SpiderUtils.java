@@ -2,31 +2,21 @@ package com.cx.coffeehi.spider.utils;
 
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.IOException;
 import java.io.InputStream;
-import java.net.URISyntaxException;
-import java.util.Collections;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.concurrent.BrokenBarrierException;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import com.cx.coffeehi.spider.bean.*;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.http.Consts;
 import org.apache.http.Header;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpHeaders;
-import org.apache.http.HttpResponse;
 import org.apache.http.HttpStatus;
 import org.apache.http.NameValuePair;
-import org.apache.http.ParseException;
-import org.apache.http.client.ClientProtocolException;
 import org.apache.http.client.CookieStore;
 import org.apache.http.client.entity.DeflateDecompressingEntity;
 import org.apache.http.client.entity.GzipDecompressingEntity;
@@ -47,11 +37,6 @@ import org.jsoup.select.Elements;
 
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.TypeReference;
-import com.cx.coffeehi.spider.bean.Author;
-import com.cx.coffeehi.spider.bean.Data;
-import com.cx.coffeehi.spider.bean.Paging;
-import com.cx.coffeehi.spider.bean.Result;
-import com.cx.coffeehi.spider.bean.SpiderContext;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 
@@ -62,8 +47,8 @@ import lombok.extern.log4j.Log4j;
 public class SpiderUtils {
     private static String INCLUDE_PARAM =
         "data[*].is_normal,admin_closed_comment,reward_info,is_collapsed,annotation_action,annotation_detail,collapse_reason,is_sticky,collapsed_by,suggest_edit,comment_count,can_comment,content,editable_content,voteup_count,reshipment_settings,comment_permission,created_time,updated_time,review_info,relevant_info,question,excerpt,relationship.is_authorized,is_author,voting,is_thanked,is_nothelp;data[*].mark_infos[*].url;data[*].author.follower_count,badge[*].topics";
-    private static String URL_PREFIX = "https://www.zhihu.com/api/v4/questions/id/answers";
-    private static String VIDEO_URL = "https://www.zhihu.com/api/v4/questions/id/answers";
+    private static String ANSWER_URL = "https://www.zhihu.com/api/v4/questions/questionId/answers";
+    private static String VIDEO_URL = "https://lens.zhihu.com/api/videos/videoId";
     public static AtomicLong NOW_NUM = new AtomicLong(0);
     public static AtomicLong TOTAL_NUM = new AtomicLong(0);
     /**
@@ -104,52 +89,75 @@ public class SpiderUtils {
                 log.info("Answers Num :" + NOW_NUM.incrementAndGet());
                 return;
             }
+            String saveDir = spiderContext.getSavePath();
             Author author = data.getAuthor();
             String content = data.getContent();
             Document doc = Jsoup.parse(content);
-            Elements pics = doc.select("img[src~=(?i).(png|jpe?g)]");
-            int picIndex = 1;
             boolean isAnonymous = "匿名用户".equals(author.getName());
-            CountDownLatch latch = new CountDownLatch(pics.size());
-            for (Element pic : pics) {
-                log.info("data id: " + data.getId() + ", latch await :" + latch.getCount());
-                String picUrl = pic.attr("data-original");
-                if (StringUtils.isEmpty(picUrl)) {
-                    picUrl = pic.attr("src");
-                    String picClass = pic.attr("class");
-                    if (StringUtils.isEmpty(picUrl) || !"thumbnail".equals(picClass)) {
-                        latch.countDown();
-                        continue;
+            Elements videos = doc.select("a[class=video-box]");
+            for (Element video : videos) {
+                String href = video.attr("href");
+                String videoId = href.substring(href.lastIndexOf("/") + 1);
+                String videoTypesUrl = VIDEO_URL.replace("videoId", videoId);
+                log.info("videoTypesUrl: " + videoTypesUrl);
+                String videoTypesDetail = doGet(videoTypesUrl, null, null);
+                log.info("videoTypesDetail: " + videoTypesDetail);
+                VideoDetails videoDetails = JSON.parseObject(videoTypesDetail, new TypeReference<VideoDetails>() {});
+                PlayList playlist = videoDetails.getPlaylist();
+                PlayItem hd = playlist.getHd();
+                if (hd != null) {
+                    String videoName = videoId + "." + hd.getFormat();
+                    if (hd != null) {
+                        log.info(hd.getPlay_url());
+                        log.info(saveDir);
+                        log.info(videoName);
+                        downloadMedia(hd.getPlay_url(), saveDir, videoName);
                     }
                 }
-                String suffix = picUrl.substring(picUrl.lastIndexOf("."));
-                String saveDir = spiderContext.getSavePath();
-                String anonymousName = "匿名-" + data.getId() + "-" + (picIndex++) + suffix;
-                String normalName = author.getName() + "-" + data.getId() + "-" + (picIndex++) + suffix;
-                String picName = isAnonymous ? anonymousName : normalName;
-                final String finalPicUrl = picUrl;
-                SpiderThread.getInstance().picTaskSubmit(()->{
-                    try {
-                        semaphore.acquire();
-                    } catch (InterruptedException e) {
-                        log.error("semaphore error : ", e);
-                    }
-                    downloadImg(finalPicUrl, saveDir, picName);
-                    latch.countDown();
-                    semaphore.release();
-                });
             }
-            try {
-                latch.await();
-                log.info("Answers Num :" + NOW_NUM.incrementAndGet());
-            } catch (InterruptedException e) {
-                log.error("latch await error : ", e);
-            }
+//            Elements pics = doc.select("img[src~=(?i).(png|jpe?g)]");
+//            CountDownLatch latch = new CountDownLatch(pics.size());
+//            int picIndex = 1;
+//            for (Element pic : pics) {
+//                log.info("data id: " + data.getId() + ", latch await :" + latch.getCount());
+//                String picUrl = pic.attr("data-original");
+//                if (StringUtils.isEmpty(picUrl)) {
+//                    picUrl = pic.attr("src");
+//                    String picClass = pic.attr("class");
+//                    if (StringUtils.isEmpty(picUrl) || !"thumbnail".equals(picClass)) {
+//                        latch.countDown();
+//                        continue;
+//                    }
+//                }
+//                String suffix = picUrl.substring(picUrl.lastIndexOf("."));
+//                String saveDir = spiderContext.getSavePath();
+//                String anonymousName = "匿名-" + data.getId() + "-" + (picIndex++) + suffix;
+//                String normalName = author.getName() + "-" + data.getId() + "-" + (picIndex++) + suffix;
+//                String picName = isAnonymous ? anonymousName : normalName;
+//                final String finalPicUrl = picUrl;
+//                SpiderThread.getInstance().picTaskSubmit(()->{
+//                    try {
+//                        semaphore.acquire();
+//                    } catch (InterruptedException e) {
+//                        log.error("semaphore error : ", e);
+//                    }
+//                    downloadMedia(finalPicUrl, saveDir, picName);
+//                    latch.countDown();
+//                    semaphore.release();
+//                });
+//            }
+//            try {
+//                latch.await();
+//                log.info("Answers Num :" + NOW_NUM.incrementAndGet());
+//            } catch (InterruptedException e) {
+//                log.error("latch await error : ", e);
+//            }
         }
+
     }
 
     public static void spiderGo(SpiderContext spiderContext) {
-        String httpUrl = URL_PREFIX.replace("id", spiderContext.getQuestionId());
+        String httpUrl = ANSWER_URL.replace("questionId", spiderContext.getQuestionId());
         TOTAL_NUM.set(getPaging(httpUrl));
         int limit = 20;
         int page = 0;
@@ -247,10 +255,16 @@ public class SpiderUtils {
         return result;
     }
 
-    // picUrl 图片连接，name 图片名称，imgPath 图片要保存的地址
-    private static void downloadImg(String picUrl, String saveDir, String imgName) {
-        HttpGet get = new HttpGet(picUrl);
-        String absolutePath = saveDir + "\\" + imgName;
+
+    /**
+     * @param: [mediaUrl, saveDir, mediaName]
+     * @return: void
+     * @auther: CoffeeHi
+     * @date: 2018/10/23 0023 上午 12:44
+     */
+    private static void downloadMedia(String mediaUrl, String saveDir, String mediaName) {
+        HttpGet get = new HttpGet(mediaUrl);
+        String absolutePath = saveDir + "\\" + mediaName;
         log.debug("FilePath: " + absolutePath);
         File file = new File(absolutePath);
         int tryTimes = 3;
@@ -280,9 +294,9 @@ public class SpiderUtils {
                 fout.flush();
                 break;
             } catch (Exception e) {
-                log.error("下载图片出错" + absolutePath);
-                log.error("下载图片出错" + picUrl);
-                log.error("下载图片出错", e);
+                log.error("下载出错" + absolutePath);
+                log.error("下载出错" + mediaUrl);
+                log.error("下载出错", e);
             }
         }
     }
