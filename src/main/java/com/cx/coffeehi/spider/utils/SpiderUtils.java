@@ -67,7 +67,7 @@ public class SpiderUtils {
     public static AtomicLong NOW_NUM = new AtomicLong(0);
     public static AtomicLong TOTAL_NUM = new AtomicLong(0);
     /**
-     * 最多20张图片同时下载
+     * 最多20张图片同时下载~~~
      */
     private static Semaphore semaphore = new Semaphore(20, false);
 
