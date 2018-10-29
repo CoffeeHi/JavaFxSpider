@@ -3,13 +3,18 @@ package com.cx.coffeehi.spider.utils;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.cx.coffeehi.spider.bean.*;
+import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.http.Consts;
 import org.apache.http.Header;
@@ -94,64 +99,99 @@ public class SpiderUtils {
             String content = data.getContent();
             Document doc = Jsoup.parse(content);
             boolean isAnonymous = "匿名用户".equals(author.getName());
-            Elements videos = doc.select("a[class=video-box]");
-            for (Element video : videos) {
-                String href = video.attr("href");
-                String videoId = href.substring(href.lastIndexOf("/") + 1);
-                String videoTypesUrl = VIDEO_URL.replace("videoId", videoId);
-                log.info("videoTypesUrl: " + videoTypesUrl);
-                String videoTypesDetail = doGet(videoTypesUrl, null, null);
-                log.info("videoTypesDetail: " + videoTypesDetail);
-                VideoDetails videoDetails = JSON.parseObject(videoTypesDetail, new TypeReference<VideoDetails>() {});
-                PlayList playlist = videoDetails.getPlaylist();
-                PlayItem hd = playlist.getHd();
-                if (hd != null) {
-                    String videoName = videoId + "." + hd.getFormat();
-                    if (hd != null) {
-                        log.info(hd.getPlay_url());
-                        log.info(saveDir);
-                        log.info(videoName);
-                        downloadMedia(hd.getPlay_url(), saveDir, videoName);
-                    }
-                }
+            String anonymousName = "匿名-" + data.getId();
+            String normalName = author.getName() + "-" + data.getId();
+            String mediaName = isAnonymous ? anonymousName : normalName;
+            int latchSize = 0;
+            Elements videoDocs = null;
+            if (spiderContext.isIfCheckVideo()) {
+                videoDocs = doc.select("a[class=video-box]");
+                latchSize += videoDocs.size();
             }
-//            Elements pics = doc.select("img[src~=(?i).(png|jpe?g)]");
-//            CountDownLatch latch = new CountDownLatch(pics.size());
-//            int picIndex = 1;
-//            for (Element pic : pics) {
-//                log.info("data id: " + data.getId() + ", latch await :" + latch.getCount());
-//                String picUrl = pic.attr("data-original");
-//                if (StringUtils.isEmpty(picUrl)) {
-//                    picUrl = pic.attr("src");
-//                    String picClass = pic.attr("class");
-//                    if (StringUtils.isEmpty(picUrl) || !"thumbnail".equals(picClass)) {
-//                        latch.countDown();
-//                        continue;
-//                    }
-//                }
-//                String suffix = picUrl.substring(picUrl.lastIndexOf("."));
-//                String saveDir = spiderContext.getSavePath();
-//                String anonymousName = "匿名-" + data.getId() + "-" + (picIndex++) + suffix;
-//                String normalName = author.getName() + "-" + data.getId() + "-" + (picIndex++) + suffix;
-//                String picName = isAnonymous ? anonymousName : normalName;
-//                final String finalPicUrl = picUrl;
-//                SpiderThread.getInstance().picTaskSubmit(()->{
-//                    try {
-//                        semaphore.acquire();
-//                    } catch (InterruptedException e) {
-//                        log.error("semaphore error : ", e);
-//                    }
-//                    downloadMedia(finalPicUrl, saveDir, picName);
-//                    latch.countDown();
-//                    semaphore.release();
-//                });
-//            }
-//            try {
-//                latch.await();
-//                log.info("Answers Num :" + NOW_NUM.incrementAndGet());
-//            } catch (InterruptedException e) {
-//                log.error("latch await error : ", e);
-//            }
+            Elements picDocs = null;
+            if (spiderContext.isIfCheckPic()) {
+                picDocs = doc.select("img[src~=(?i).(png|jpe?g)]");
+                latchSize += picDocs.size();
+            }
+            if (latchSize == 0) {
+                log.info("Answers Num :" + NOW_NUM.incrementAndGet());
+                return;
+            }
+            CountDownLatch latch = new CountDownLatch(latchSize);
+            if (videoDocs != null) {
+                downloadVideo(videoDocs, saveDir, mediaName, latch);
+            }
+            if (picDocs != null) {
+                downloadPicture(saveDir, mediaName, picDocs, latch);
+            }
+            try {
+                latch.await();
+                log.info("Answers Num :" + NOW_NUM.incrementAndGet());
+            } catch (InterruptedException e) {
+                log.error("latch await error : ", e);
+            }
+        }
+
+        private void downloadPicture(String saveDir, String mediaName, Elements picDocs, CountDownLatch latch) {
+            AtomicInteger mediaIndex = new AtomicInteger(1);
+            for (Element pic : picDocs) {
+                SpiderThread.getInstance().picTaskSubmit(()->{
+                    while (true) {
+                        if (!semaphore.tryAcquire()) {
+                            continue;
+                        }
+                        String picUrl = pic.attr("data-original");
+                        if (StringUtils.isEmpty(picUrl)) {
+                            picUrl = pic.attr("src");
+                            String picClass = pic.attr("class");
+                            if (StringUtils.isEmpty(picUrl) || !"thumbnail".equals(picClass)) {
+                                latch.countDown();
+                                continue;
+                            }
+                        }
+                        String suffix = picUrl.substring(picUrl.lastIndexOf("."));
+                        String picName = mediaName + "-" + mediaIndex.getAndIncrement() + suffix;
+                        log.info("picName: " + picName);
+//                        downloadMedia(picUrl, saveDir, picName);
+                        semaphore.release();
+                        latch.countDown();
+                        break;
+                    }
+
+                });
+            }
+        }
+
+        private void downloadVideo(Elements videos, String saveDir, String mediaName, CountDownLatch latch) {
+            AtomicInteger mediaIndex = new AtomicInteger(1);
+            for (Element video : videos) {
+                SpiderThread.getInstance().picTaskSubmit(()-> {
+                    while (true) {
+                        if (!semaphore.tryAcquire()) {
+                            continue;
+                        }
+                        String href = video.attr("href");
+                        String videoId = href.substring(href.lastIndexOf("/") + 1);
+                        String videoTypesUrl = VIDEO_URL.replace("videoId", videoId);
+                        log.info("videoTypesUrl: " + videoTypesUrl);
+                        String videoTypesDetail = doGet(videoTypesUrl, null, null);
+                        log.info("videoTypesDetail: " + videoTypesDetail);
+                        VideoDetails videoDetails = JSON.parseObject(videoTypesDetail, new TypeReference<VideoDetails>() {});
+                        PlayList playlist = videoDetails.getPlaylist();
+                        PlayItem hd = playlist.getHd();
+                        if (hd != null) {
+                            String videoName = mediaName + "-" + mediaIndex.getAndIncrement() + "." + hd.getFormat();
+                            log.info("videoName: " + videoName);
+                            log.info(hd.getPlay_url());
+                            log.info(saveDir);
+//                            downloadMedia(hd.getPlay_url(), saveDir, videoName);
+                        }
+                        semaphore.release();
+                        latch.countDown();
+                        break;
+                    }
+                });
+            }
         }
 
     }
@@ -161,14 +201,14 @@ public class SpiderUtils {
         TOTAL_NUM.set(getPaging(httpUrl));
         int limit = 20;
         int page = 0;
-        int offset;
+        int offset = 0;
         Map<String, String> paramMap = Maps.newHashMap();
         paramMap.put("include", INCLUDE_PARAM);
         paramMap.put("limit", String.valueOf(limit));
         paramMap.put("sort_by", "default");
         do {
             offset = (page++) * limit;
-            log.info("offset: " + offset);
+//            log.info("offset: " + offset);
             paramMap.put("offset", String.valueOf(offset));
             SpiderThread.getInstance()
                     .ansTaskSubmit(new SpiderUtils().new GetAnswer(spiderContext, httpUrl, paramMap));

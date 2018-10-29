@@ -47,7 +47,7 @@ public class SpiderThread {
         BlockingQueue<Runnable> answerQueue = new LinkedBlockingQueue<Runnable>(2000);
         ThreadFactory ansThreadFactory = new ThreadFactoryBuilder().setDaemon(true).setNameFormat("answer-task-t%d")
             .setUncaughtExceptionHandler(ansUnExceHandler).build();
-        answerTaskExecutor = new ThreadPoolExecutor(20, 20, 5L, TimeUnit.SECONDS, answerQueue, ansThreadFactory);
+        answerTaskExecutor = new ThreadPoolExecutor(2, 2, 5L, TimeUnit.SECONDS, answerQueue, ansThreadFactory);
         
         UncaughtExceptionHandler picUnExceHandler = new UncaughtExceptionHandler() {
             public void uncaughtException(Thread thread, Throwable throwable) {
