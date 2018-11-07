@@ -90,7 +90,7 @@ public class SpiderController implements Initializable {
     @FXML
     public void checkPic(ActionEvent event) {
         log.info("checkPic:" + checkPic.isSelected());
-        spiderContext.setIfCheckVideo(checkPic.isSelected());
+        spiderContext.setIfCheckPic(checkPic.isSelected());
     }
 
     @FXML

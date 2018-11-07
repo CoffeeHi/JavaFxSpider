@@ -119,7 +119,7 @@ public class SpiderUtils {
             }
             CountDownLatch latch = new CountDownLatch(latchSize);
             if (videoDocs != null) {
-                downloadVideo(videoDocs, saveDir, mediaName, latch);
+                downloadVideo(saveDir, mediaName, videoDocs, latch);
             }
             if (picDocs != null) {
                 downloadPicture(saveDir, mediaName, picDocs, latch);
@@ -145,24 +145,24 @@ public class SpiderUtils {
                             picUrl = pic.attr("src");
                             String picClass = pic.attr("class");
                             if (StringUtils.isEmpty(picUrl) || !"thumbnail".equals(picClass)) {
+                                semaphore.release();
                                 latch.countDown();
-                                continue;
+                                break;
                             }
                         }
                         String suffix = picUrl.substring(picUrl.lastIndexOf("."));
                         String picName = mediaName + "-" + mediaIndex.getAndIncrement() + suffix;
                         log.info("picName: " + picName);
-//                        downloadMedia(picUrl, saveDir, picName);
+                        downloadMedia(picUrl, saveDir, picName);
                         semaphore.release();
                         latch.countDown();
                         break;
                     }
-
                 });
             }
         }
 
-        private void downloadVideo(Elements videos, String saveDir, String mediaName, CountDownLatch latch) {
+        private void downloadVideo(String saveDir, String mediaName, Elements videos, CountDownLatch latch) {
             AtomicInteger mediaIndex = new AtomicInteger(1);
             for (Element video : videos) {
                 SpiderThread.getInstance().picTaskSubmit(()-> {
@@ -184,7 +184,7 @@ public class SpiderUtils {
                             log.info("videoName: " + videoName);
                             log.info(hd.getPlay_url());
                             log.info(saveDir);
-//                            downloadMedia(hd.getPlay_url(), saveDir, videoName);
+                            downloadMedia(hd.getPlay_url(), saveDir, videoName);
                         }
                         semaphore.release();
                         latch.countDown();
@@ -334,8 +334,8 @@ public class SpiderUtils {
                 fout.flush();
                 break;
             } catch (Exception e) {
-                log.error("下载出错" + absolutePath);
-                log.error("下载出错" + mediaUrl);
+                log.error("下载出错：" + absolutePath);
+                log.error("下载出错：" + mediaUrl);
                 log.error("下载出错", e);
             }
         }
