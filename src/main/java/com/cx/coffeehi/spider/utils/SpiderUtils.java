@@ -56,11 +56,6 @@ public class SpiderUtils {
     private static String VIDEO_URL = "https://lens.zhihu.com/api/videos/videoId";
     public static AtomicLong NOW_NUM = new AtomicLong(0);
     public static AtomicLong TOTAL_NUM = new AtomicLong(0);
-    /**
-     * 最多20张图片同时下载~~~~
-     */
-    private static Semaphore semaphore = new Semaphore(20, false);
-
 
     private class GetAnswer implements Runnable {
         private SpiderContext spiderContext;
@@ -84,13 +79,30 @@ public class SpiderUtils {
             Long totals = paging.getTotals();
             TOTAL_NUM.set(totals);
             List<Data> dataList = resultObj.getData();
+            long timestamp = System.currentTimeMillis();
             for (Data data : dataList) {
-                filterAnswer(data, spiderContext);
+                // 每个data是个答案，每个答案里可能存在多个图片或视频
+                filterAnswer(data, spiderContext, timestamp);
             }
         }
 
-        private void filterAnswer(Data data, SpiderContext spiderContext) {
-            if (data.getVoteup_count() < 10) {
+        /**
+         * 回答是否大于1天
+         * 
+         * @param createTime
+         * @param timestamp
+         * @return 
+         * @author chenxiang
+         * @date 2018年11月8日
+         */
+        private boolean isExceedTime (long createTime, long timestamp) {
+            return ((timestamp - createTime) / 1000) * 60 * 60 * 24 > 1;
+        }
+        
+        private void filterAnswer(Data data, SpiderContext spiderContext, long timestamp) {
+            // 回答超过1天且赞数小于10，则不提取照片
+            if (data.getVoteup_count().longValue() < 10L
+                && isExceedTime(data.getCreated_time().longValue(), timestamp)) {
                 log.info("Answers Num :" + NOW_NUM.incrementAndGet());
                 return;
             }
@@ -102,33 +114,34 @@ public class SpiderUtils {
             String anonymousName = "匿名-" + data.getId();
             String normalName = author.getName() + "-" + data.getId();
             String mediaName = isAnonymous ? anonymousName : normalName;
-            int latchSize = 0;
+            int mediaSize = 0;
             Elements videoDocs = null;
             if (spiderContext.isIfCheckVideo()) {
                 videoDocs = doc.select("a[class=video-box]");
-                latchSize += videoDocs.size();
+                mediaSize += videoDocs.size();
             }
             Elements picDocs = null;
             if (spiderContext.isIfCheckPic()) {
                 picDocs = doc.select("img[src~=(?i).(png|jpe?g)]");
-                latchSize += picDocs.size();
+                mediaSize += picDocs.size();
             }
-            if (latchSize == 0) {
+            if (mediaSize == 0) {
                 log.info("Answers Num :" + NOW_NUM.incrementAndGet());
                 return;
             }
-            CountDownLatch latch = new CountDownLatch(latchSize);
+            CountDownLatch mediaLatch = new CountDownLatch(mediaSize);
             if (videoDocs != null) {
-                downloadVideo(saveDir, mediaName, videoDocs, latch);
+                downloadVideo(saveDir, mediaName, videoDocs, mediaLatch);
             }
             if (picDocs != null) {
-                downloadPicture(saveDir, mediaName, picDocs, latch);
+                downloadPicture(saveDir, mediaName, picDocs, mediaLatch);
             }
             try {
-                latch.await();
+                // 默认每个答案，1分钟内下载完
+                mediaLatch.await();
                 log.info("Answers Num :" + NOW_NUM.incrementAndGet());
             } catch (InterruptedException e) {
-                log.error("latch await error : ", e);
+                log.error("mediaLatch await error : ", e);
             }
         }
 
@@ -136,28 +149,20 @@ public class SpiderUtils {
             AtomicInteger mediaIndex = new AtomicInteger(1);
             for (Element pic : picDocs) {
                 SpiderThread.getInstance().picTaskSubmit(()->{
-                    while (true) {
-                        if (!semaphore.tryAcquire()) {
-                            continue;
-                        }
                         String picUrl = pic.attr("data-original");
                         if (StringUtils.isEmpty(picUrl)) {
                             picUrl = pic.attr("src");
                             String picClass = pic.attr("class");
                             if (StringUtils.isEmpty(picUrl) || !"thumbnail".equals(picClass)) {
-                                semaphore.release();
                                 latch.countDown();
-                                break;
+                                return;
                             }
                         }
                         String suffix = picUrl.substring(picUrl.lastIndexOf("."));
                         String picName = mediaName + "-" + mediaIndex.getAndIncrement() + suffix;
                         log.info("picName: " + picName);
                         downloadMedia(picUrl, saveDir, picName);
-                        semaphore.release();
                         latch.countDown();
-                        break;
-                    }
                 });
             }
         }
@@ -166,10 +171,6 @@ public class SpiderUtils {
             AtomicInteger mediaIndex = new AtomicInteger(1);
             for (Element video : videos) {
                 SpiderThread.getInstance().picTaskSubmit(()-> {
-                    while (true) {
-                        if (!semaphore.tryAcquire()) {
-                            continue;
-                        }
                         String href = video.attr("href");
                         String videoId = href.substring(href.lastIndexOf("/") + 1);
                         String videoTypesUrl = VIDEO_URL.replace("videoId", videoId);
@@ -186,10 +187,7 @@ public class SpiderUtils {
                             log.info(saveDir);
                             downloadMedia(hd.getPlay_url(), saveDir, videoName);
                         }
-                        semaphore.release();
                         latch.countDown();
-                        break;
-                    }
                 });
             }
         }
@@ -208,7 +206,6 @@ public class SpiderUtils {
         paramMap.put("sort_by", "default");
         do {
             offset = (page++) * limit;
-//            log.info("offset: " + offset);
             paramMap.put("offset", String.valueOf(offset));
             SpiderThread.getInstance()
                     .ansTaskSubmit(new SpiderUtils().new GetAnswer(spiderContext, httpUrl, paramMap));
@@ -270,7 +267,7 @@ public class SpiderUtils {
                     HttpClients.custom().setDefaultHeaders(headerList).setDefaultCookieStore(cookieStore).build();
                 CloseableHttpResponse response = httpClient.execute(httpGet)) {
                 if (response.getStatusLine().getStatusCode() != HttpStatus.SC_OK) {
-                    break;
+                    continue;
                 }
                 log.info("HTTP STATUS : " + response.getStatusLine());
                 HttpEntity entity = response.getEntity();
@@ -313,7 +310,7 @@ public class SpiderUtils {
                 CloseableHttpResponse response = httpclient.execute(get);
                 FileOutputStream fout = new FileOutputStream(file)) {
                 if (response.getStatusLine().getStatusCode() != HttpStatus.SC_OK) {
-                    break;
+                    continue;
                 }
                 HttpEntity entity = response.getEntity();
                 InputStream in = entity.getContent();

@@ -47,7 +47,7 @@ public class SpiderThread {
         BlockingQueue<Runnable> answerQueue = new LinkedBlockingQueue<Runnable>(2000);
         ThreadFactory ansThreadFactory = new ThreadFactoryBuilder().setDaemon(true).setNameFormat("answer-task-t%d")
             .setUncaughtExceptionHandler(ansUnExceHandler).build();
-        answerTaskExecutor = new ThreadPoolExecutor(2, 2, 5L, TimeUnit.SECONDS, answerQueue, ansThreadFactory);
+        answerTaskExecutor = new ThreadPoolExecutor(10, 10, 0L, TimeUnit.SECONDS, answerQueue, ansThreadFactory);
         
         UncaughtExceptionHandler picUnExceHandler = new UncaughtExceptionHandler() {
             public void uncaughtException(Thread thread, Throwable throwable) {
@@ -57,7 +57,7 @@ public class SpiderThread {
         BlockingQueue<Runnable> picQueue = new LinkedBlockingQueue<Runnable>(2000);
         ThreadFactory picThreadFactory = new ThreadFactoryBuilder().setDaemon(true).setNameFormat("pic-task-t%d")
             .setUncaughtExceptionHandler(picUnExceHandler).build();
-        picTaskExecutor = new ThreadPoolExecutor(40, 40, 5L, TimeUnit.SECONDS, picQueue, picThreadFactory);
+        picTaskExecutor = new ThreadPoolExecutor(40, 40, 0L, TimeUnit.SECONDS, picQueue, picThreadFactory);
     }
     
     private volatile static SpiderThread instance =  null;
