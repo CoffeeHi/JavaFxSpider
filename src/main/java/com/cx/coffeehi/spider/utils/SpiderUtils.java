@@ -56,6 +56,7 @@ public class SpiderUtils {
     private static String VIDEO_URL = "https://lens.zhihu.com/api/videos/videoId";
     public static AtomicLong NOW_NUM = new AtomicLong(0);
     public static AtomicLong TOTAL_NUM = new AtomicLong(0);
+    
 
     private class GetAnswer implements Runnable {
         private SpiderContext spiderContext;
@@ -103,7 +104,7 @@ public class SpiderUtils {
             // 回答超过1天且赞数小于10，则不提取照片
             if (data.getVoteup_count().longValue() < 10L
                 && isExceedTime(data.getCreated_time().longValue(), timestamp)) {
-                log.info("Answers Num :" + NOW_NUM.incrementAndGet());
+                log.info("Improper answer, the num of answers :" + NOW_NUM.incrementAndGet());
                 return;
             }
             String saveDir = spiderContext.getSavePath();
@@ -126,7 +127,7 @@ public class SpiderUtils {
                 mediaSize += picDocs.size();
             }
             if (mediaSize == 0) {
-                log.info("Answers Num :" + NOW_NUM.incrementAndGet());
+                log.info("No media answer, the num of answers :" + NOW_NUM.incrementAndGet());
                 return;
             }
             CountDownLatch mediaLatch = new CountDownLatch(mediaSize);
@@ -137,9 +138,8 @@ public class SpiderUtils {
                 downloadPicture(saveDir, mediaName, picDocs, mediaLatch);
             }
             try {
-                // 默认每个答案，1分钟内下载完
                 mediaLatch.await();
-                log.info("Answers Num :" + NOW_NUM.incrementAndGet());
+                log.info("Downloaded answer, the num of answers :" + NOW_NUM.incrementAndGet());
             } catch (InterruptedException e) {
                 log.error("mediaLatch await error : ", e);
             }
@@ -200,12 +200,12 @@ public class SpiderUtils {
         int limit = 20;
         int page = 0;
         int offset = 0;
-        Map<String, String> paramMap = Maps.newHashMap();
-        paramMap.put("include", INCLUDE_PARAM);
-        paramMap.put("limit", String.valueOf(limit));
-        paramMap.put("sort_by", "default");
         do {
             offset = (page++) * limit;
+            Map<String, String> paramMap = Maps.newHashMap();
+            paramMap.put("include", INCLUDE_PARAM);
+            paramMap.put("limit", String.valueOf(limit));
+            paramMap.put("sort_by", "default");
             paramMap.put("offset", String.valueOf(offset));
             SpiderThread.getInstance()
                     .ansTaskSubmit(new SpiderUtils().new GetAnswer(spiderContext, httpUrl, paramMap));
