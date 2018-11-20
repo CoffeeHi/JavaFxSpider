@@ -40,6 +40,7 @@
 			<artifactId>guava</artifactId>
 			<version>26.0-jre</version>
 		</dependency>
+		
 		<!-- https://mvnrepository.com/artifact/com.alibaba/fastjson -->
 		<dependency>
 			<groupId>com.alibaba</groupId>
